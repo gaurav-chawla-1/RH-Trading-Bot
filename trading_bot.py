@@ -67,54 +67,101 @@ class RobinhoodTrader:
                 json.dump(existing_trades, f, indent=4)
 
     def get_advanced_signals(self, df: pd.DataFrame) -> Dict:
-        signals = {}
-        
-        close_prices = df['close_price'].values
-        
-        # MACD using talib
-        macd, signal, _ = ta.MACD(close_prices)
-        signals['macd'] = macd[-1]
-        signals['macd_signal'] = signal[-1]
-        
-        # Bollinger Bands using talib
-        upper, middle, lower = ta.BBANDS(close_prices)
-        signals['bb_upper'] = upper[-1]
-        signals['bb_lower'] = lower[-1]
-        
-        # VWAP calculation
-        high = df['high_price'].astype(float).values
-        low = df['low_price'].astype(float).values
-        close = close_prices
-        volume = df['volume'].astype(float).values
-        
-        typical_price = (high + low + close) / 3
-        vwap = np.average(typical_price, weights=volume)
-        signals['vwap'] = vwap
-        
-        return signals
+        """
+        Calculate advanced technical indicators with proper windowing
+        """
+        try:
+            signals = {}
+            
+            # Ensure we have enough data points
+            if len(df) < 26:  # MACD needs at least 26 periods
+                self.logger.error("Insufficient data for advanced signals")
+                return None
+            
+            close_prices = df['close_price'].values
+            
+            # MACD calculation (12, 26, 9)
+            exp1 = df['close_price'].ewm(span=12, adjust=False).mean()
+            exp2 = df['close_price'].ewm(span=26, adjust=False).mean()
+            macd = exp1 - exp2
+            signal = macd.ewm(span=9, adjust=False).mean()
+            
+            signals['macd'] = macd.iloc[-1]
+            signals['macd_signal'] = signal.iloc[-1]
+            
+            # Bollinger Bands (20 period, 2 standard deviations)
+            rolling_mean = df['close_price'].rolling(window=20).mean()
+            rolling_std = df['close_price'].rolling(window=20).std()
+            signals['bb_upper'] = rolling_mean.iloc[-1] + (rolling_std.iloc[-1] * 2)
+            signals['bb_lower'] = rolling_mean.iloc[-1] - (rolling_std.iloc[-1] * 2)
+            
+            # VWAP calculation for the current day only
+            df['datetime'] = pd.to_datetime(df.index)
+            today = pd.Timestamp.now(tz='UTC').date()
+            df_today = df[df['datetime'].dt.date == today]
+            
+            if not df_today.empty:
+                high = df_today['high_price'].astype(float)
+                low = df_today['low_price'].astype(float)
+                close = df_today['close_price'].astype(float)
+                volume = df_today['volume'].astype(float)
+                
+                typical_price = (high + low + close) / 3
+                vwap = (typical_price * volume).cumsum() / volume.cumsum()
+                signals['vwap'] = vwap.iloc[-1]
+            else:
+                signals['vwap'] = close_prices[-1]  # Use current price if no intraday data
+            
+            if self.debug:
+                self.logger.debug("\nAdvanced Signals Details:")
+                self.logger.debug(f"MACD: {signals['macd']:.2f}")
+                self.logger.debug(f"MACD Signal: {signals['macd_signal']:.2f}")
+                self.logger.debug(f"BB Upper: {signals['bb_upper']:.2f}")
+                self.logger.debug(f"BB Lower: {signals['bb_lower']:.2f}")
+                self.logger.debug(f"VWAP: {signals['vwap']:.2f}")
+                self.logger.debug(f"Data points used: {len(df)}")
+                self.logger.debug(f"Today's data points: {len(df_today) if 'df_today' in locals() else 0}")
+            
+            return signals
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating advanced signals: {str(e)}")
+            if self.debug:
+                import traceback
+                self.logger.debug(traceback.format_exc())
+            return None
 
     def get_rsi_data(self, symbol, interval='5minute', lookback='week'):
         """
         Get RSI and other technical indicators for a symbol
-        Supported spans: 'day', 'week', 'month', '3month', 'year', '5year'
-        Supported intervals: '5minute', '10minute', 'hour', 'day', 'week'
         """
         try:
-            # Get historical data
+            # Get historical data with bounds parameter
             historical_data = rh.stocks.get_stock_historicals(
                 symbol,
                 interval=interval,
                 span=lookback,
-                bounds='regular'
+                bounds='regular'  # Use 'regular' for market hours or 'extended' for extended hours
             )
             
             if not historical_data:
                 self.logger.error(f"No historical data received for {symbol}")
                 return None, None
             
-            # Convert to DataFrame
+            # Convert to DataFrame with datetime index
             df = pd.DataFrame(historical_data)
+            df['begins_at'] = pd.to_datetime(df['begins_at'])
+            df.set_index('begins_at', inplace=True)
             df['close_price'] = df['close_price'].astype(float)
+            
+            # Get only the most recent data points
+            now = pd.Timestamp.now(tz='UTC')
+            cutoff = now - pd.Timedelta(days=1)  # Get last 24 hours of data
+            df = df[df.index > cutoff]
+            
+            if len(df) < 14:  # Need at least 14 periods for RSI
+                self.logger.error(f"Insufficient data points: {len(df)}")
+                return None, None
             
             # Calculate RSI using talib
             close_prices = df['close_price'].values
@@ -122,9 +169,15 @@ class RobinhoodTrader:
             current_rsi = rsi[-1]
             
             if self.debug:
-                self.logger.debug(f"Historical data points: {len(df)}")
+                self.logger.debug(f"Time window: {df.index[0]} to {df.index[-1]}")
+                self.logger.debug(f"Data points: {len(df)}")
                 self.logger.debug(f"Latest close price: {close_prices[-1]}")
                 self.logger.debug(f"Calculated RSI: {current_rsi}")
+                
+                # Log last few prices to verify changes
+                self.logger.debug("Last 5 prices:")
+                for idx, price in enumerate(close_prices[-5:]):
+                    self.logger.debug(f"  {df.index[-5+idx]}: ${price:.2f}")
             
             if self.strategy == 'advanced':
                 advanced_signals = self.get_advanced_signals(df)
@@ -145,12 +198,26 @@ class RobinhoodTrader:
             return current_rsi <= 30
         
         elif self.strategy == 'advanced':
+            if advanced_signals is None:
+                return False
+            
             # More sophisticated entry conditions
+            macd_crossover = advanced_signals['macd'] > advanced_signals['macd_signal']
+            price_below_bb = current_price < advanced_signals['bb_lower']
+            price_below_vwap = current_price < advanced_signals['vwap']
+            
+            if self.debug:
+                self.logger.debug("\nBuy Signal Analysis:")
+                self.logger.debug(f"RSI Condition: {current_rsi <= 30}")
+                self.logger.debug(f"MACD Crossover: {macd_crossover}")
+                self.logger.debug(f"Price Below BB: {price_below_bb}")
+                self.logger.debug(f"Price Below VWAP: {price_below_vwap}")
+            
             return (
                 current_rsi <= 30 and
-                advanced_signals['macd'] > advanced_signals['macd_signal'] and
-                current_price < advanced_signals['bb_lower'] and
-                current_price < advanced_signals['vwap']
+                macd_crossover and
+                price_below_bb and
+                price_below_vwap
             )
 
     def should_sell(self, current_price: float, current_rsi: float, 
@@ -160,12 +227,26 @@ class RobinhoodTrader:
             return (current_rsi >= 70 or profit_percentage >= 3 or loss_percentage >= 30)
         
         elif self.strategy == 'advanced':
+            if advanced_signals is None:
+                return False
+            
+            macd_crossunder = advanced_signals['macd'] < advanced_signals['macd_signal']
+            price_above_bb = current_price > advanced_signals['bb_upper']
+            
+            if self.debug:
+                self.logger.debug("\nSell Signal Analysis:")
+                self.logger.debug(f"RSI Condition: {current_rsi >= 70}")
+                self.logger.debug(f"Profit Target: {profit_percentage >= 3}")
+                self.logger.debug(f"Stop Loss: {loss_percentage >= 30}")
+                self.logger.debug(f"MACD Crossunder: {macd_crossunder}")
+                self.logger.debug(f"Price Above BB: {price_above_bb}")
+            
             return (
                 current_rsi >= 70 or
                 profit_percentage >= 3 or
                 loss_percentage >= 30 or
-                (advanced_signals['macd'] < advanced_signals['macd_signal'] and profit_percentage > 1) or
-                current_price > advanced_signals['bb_upper']
+                (macd_crossunder and profit_percentage > 1) or
+                price_above_bb
             )
 
     def execute_trade_strategy(self, symbol):
@@ -173,9 +254,30 @@ class RobinhoodTrader:
             self.logger.error("Please login first")
             return
 
+        last_price = None
+        last_check_time = None
+
         while True:
             try:
+                current_time = datetime.datetime.now()
+                
+                # Check if market is open (simple check, can be enhanced)
+                if current_time.hour < 9 or current_time.hour >= 16:
+                    self.logger.info("Market is closed. Waiting for market hours...")
+                    time.sleep(300)  # Sleep for 5 minutes
+                    continue
+                    
                 current_price = float(rh.stocks.get_latest_price(symbol)[0])
+                
+                # Skip if price hasn't changed
+                if last_price == current_price and last_check_time and \
+                   (current_time - last_check_time).seconds < 300:
+                    time.sleep(60)
+                    continue
+                    
+                last_price = current_price
+                last_check_time = current_time
+                
                 current_rsi, advanced_signals = self.get_rsi_data(symbol)
                 
                 if current_rsi is None:
@@ -183,7 +285,8 @@ class RobinhoodTrader:
                     time.sleep(60)
                     continue
                 
-                self.logger.info(f"\nCurrent Price: ${current_price:.2f}")
+                self.logger.info(f"\nTime: {current_time}")
+                self.logger.info(f"Current Price: ${current_price:.2f}")
                 self.logger.info(f"Current RSI: {current_rsi:.2f}")
                 self.logger.info(f"Total Profit/Loss: ${self.total_profit_loss:.2f}")
                 
@@ -248,7 +351,7 @@ class RobinhoodTrader:
                         self.current_position = None
                         self.buy_price = None
 
-                time.sleep(60)  # Wait for 1 minute before next check
+                time.sleep(300)  # Wait for 5 minutes before next check
 
             except Exception as e:
                 self.logger.error(f"Error occurred: {str(e)}")
