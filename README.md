@@ -84,11 +84,12 @@ Note: This is a work in progress and is not yet ready for production use and onl
 
 # COMMAND LINE ARGUMENTS:
 ----------------------
+``
 --debug            : Enable debug mode
 --strategy         : Choose 'basic' or 'advanced' (default: basic)
 --initial-amount   : Set initial trading amount (default: $100)
 --analyze-date     : Analyze trades for specific date (format: YYYYMMDD)
-
+``
 # TRADING STRATEGIES
 -----------------
 
@@ -117,6 +118,7 @@ Note: This is a work in progress and is not yet ready for production use and onl
 
 # FILE STRUCTURE
 -------------
+``
 robinhood-trading-bot/
 ├── trading_bot.py      : Main application file
 ├── requirements.txt    : Python dependencies
@@ -124,6 +126,7 @@ robinhood-trading-bot/
 ├── trading_log.txt    : Trading activity logs
 └── trades/            : Directory containing trade history
     └── trades_YYYYMMDD.json
+``
 
 # CONFIGURATION
 ------------
