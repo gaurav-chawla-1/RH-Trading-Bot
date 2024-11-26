@@ -134,14 +134,16 @@ class RobinhoodTrader:
     def get_rsi_data(self, symbol, interval='5minute', lookback='week'):
         """
         Get RSI and other technical indicators for a symbol
+        Supported spans: 'day', 'week', 'month', '3month', 'year', '5year'
+        Supported intervals: '5minute', '10minute', 'hour', 'day', 'week'
         """
         try:
-            # Get historical data with bounds parameter
+            # Get historical data with correct bounds and span
             historical_data = rh.stocks.get_stock_historicals(
                 symbol,
                 interval=interval,
-                span=lookback,
-                bounds='regular'  # Use 'regular' for market hours or 'extended' for extended hours
+                span='day',  # Use 'day' for extended hours
+                bounds='extended'  # Use extended hours data
             )
             
             if not historical_data:
@@ -150,13 +152,23 @@ class RobinhoodTrader:
             
             # Convert to DataFrame with datetime index
             df = pd.DataFrame(historical_data)
-            df['begins_at'] = pd.to_datetime(df['begins_at'])
-            df.set_index('begins_at', inplace=True)
+            
+            # Handle datetime conversion safely
+            try:
+                df['timestamp'] = pd.to_datetime([x['begins_at'] for x in historical_data])
+                df.set_index('timestamp', inplace=True)
+            except Exception as e:
+                self.logger.error(f"Error processing timestamps: {str(e)}")
+                if self.debug:
+                    self.logger.debug(f"Data sample: {historical_data[0] if historical_data else 'No data'}")
+                return None, None
+            
+            # Convert price columns
             df['close_price'] = df['close_price'].astype(float)
             
             # Get only the most recent data points
             now = pd.Timestamp.now(tz='UTC')
-            cutoff = now - pd.Timedelta(days=1)  # Get last 24 hours of data
+            cutoff = now - pd.Timedelta(hours=24)  # Get last 24 hours of data
             df = df[df.index > cutoff]
             
             if len(df) < 14:  # Need at least 14 periods for RSI
