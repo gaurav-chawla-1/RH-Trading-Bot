@@ -90,14 +90,17 @@ Note: This is a work in progress and is not yet ready for production use and onl
 -----------------
 
 1. BASIC USAGE:
+```
    $ python trading_bot.py
-
+```
 2. ADVANCED USAGE:
+```
    $ python trading_bot.py --debug --strategy advanced --initial-amount 500
-
+```
 3. ANALYZE TRADES:
+```
    $ python trading_bot.py --analyze-date 20240315
-
+```
 # COMMAND LINE ARGUMENTS:
 ----------------------
 ```
