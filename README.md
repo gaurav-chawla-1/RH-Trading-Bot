@@ -205,10 +205,9 @@ MIT License
 # SUPPORT
 -------
 For issues and questions:
-1. Check the troubleshooting section
-2. Review debug logs
-3. Verify system requirements
-4. Check Robinhood API status
+1. Review debug logs
+2. Verify system requirements
+3. Check Robinhood API status
 
 # VERSION INFORMATION
 -----------------
