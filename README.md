@@ -30,45 +30,61 @@ Note: This is a work in progress and is not yet ready for production use and onl
 ### FOR MAC USERS:
 -------------
 1. Install TA-Lib:
+```
    $ brew install ta-lib
+```
 
 2. Create virtual environment:
+```
    $ python3 -m venv venvrh
+```
 
 3. Activate virtual environment:
+```
    $ source venvrh/bin/activate
+```
 
 4. Install requirements:
+```
    $ pip install --upgrade pip
    $ pip install -r requirements.txt
+```
 
 ### FOR LINUX USERS:
 ---------------
 1. Install TA-Lib:
+```
    $ wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
    $ tar -xzf ta-lib-0.4.0-src.tar.gz
    $ cd ta-lib/
    $ ./configure --prefix=/usr
    $ make
    $ sudo make install
+```
 
 2. Create and activate virtual environment:
+```
    $ python3 -m venv venvrh
    $ source venvrh/bin/activate
    $ pip install --upgrade pip
    $ pip install -r requirements.txt
+```
 
 ### FOR WINDOWS USERS:
 -----------------
 1. Download TA-Lib:
+```
    - Download from: http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-msvc.zip
    - Extract to C:\ta-lib
+```
 
 2. Create and activate virtual environment:
+```
     > python -m venv venvrh
     > venvrh\Scripts\activate
     > pip install --upgrade pip
     > pip install -r requirements.txt
+```
 
 # USAGE INSTRUCTIONS
 -----------------
@@ -84,12 +100,13 @@ Note: This is a work in progress and is not yet ready for production use and onl
 
 # COMMAND LINE ARGUMENTS:
 ----------------------
-<blockquote>
+```
 --debug            : Enable debug mode
 --strategy         : Choose 'basic' or 'advanced' (default: basic)
 --initial-amount   : Set initial trading amount (default: $100)
 --analyze-date     : Analyze trades for specific date (format: YYYYMMDD)
-</blockquote>
+```
+
 # TRADING STRATEGIES
 -----------------
 
@@ -118,7 +135,7 @@ Note: This is a work in progress and is not yet ready for production use and onl
 
 # FILE STRUCTURE
 -------------
-<blockquote>
+```
 robinhood-trading-bot/
 ├── trading_bot.py      : Main application file
 ├── requirements.txt    : Python dependencies
@@ -126,13 +143,13 @@ robinhood-trading-bot/
 ├── trading_log.txt    : Trading activity logs
 └── trades/            : Directory containing trade history
     └── trades_YYYYMMDD.json
-</blockquote>
+```
 
 # CONFIGURATION
 ------------
 1. Initial Amount:
-   Default: $100
-   Change using: --initial-amount flag
+   - Default: $100
+   -Change using: --initial-amount flag
 
 2. Risk Management:
    - Stop Loss: 30% of purchase price
@@ -158,11 +175,13 @@ robinhood-trading-bot/
 
 # EXAMPLE USAGE SESSION
 --------------------
+```
 $ python trading_bot.py --debug --strategy advanced
 Enter Robinhood username: your_username
 Enter Robinhood password: your_password
 Enter the OTP sent to your phone: 123456
 Enter stock symbol to trade: AAPL
+```
 
 # SAFETY FEATURES
 --------------
