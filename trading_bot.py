@@ -264,15 +264,15 @@ class RobinhoodTrader:
                 # Check if market is open (simple check, can be enhanced)
                 if current_time.hour < 9 or current_time.hour >= 16:
                     self.logger.info("Market is closed. Waiting for market hours...")
-                    time.sleep(300)  # Sleep for 5 minutes
+                    time.sleep(60)  # Changed from 300 to 60 seconds
                     continue
                     
                 current_price = float(rh.stocks.get_latest_price(symbol)[0])
                 
                 # Skip if price hasn't changed
                 if last_price == current_price and last_check_time and \
-                   (current_time - last_check_time).seconds < 300:
-                    time.sleep(60)
+                   (current_time - last_check_time).seconds < 60:  # Changed from 300 to 60 seconds
+                    time.sleep(10)  # Short sleep if no change
                     continue
                     
                 last_price = current_price
@@ -281,8 +281,8 @@ class RobinhoodTrader:
                 current_rsi, advanced_signals = self.get_rsi_data(symbol)
                 
                 if current_rsi is None:
-                    self.logger.error("Failed to get RSI data, retrying in 60 seconds...")
-                    time.sleep(60)
+                    self.logger.error("Failed to get RSI data, retrying in 30 seconds...")
+                    time.sleep(30)  # Changed from 60 to 30 seconds
                     continue
                 
                 self.logger.info(f"\nTime: {current_time}")
@@ -351,11 +351,11 @@ class RobinhoodTrader:
                         self.current_position = None
                         self.buy_price = None
 
-                time.sleep(300)  # Wait for 5 minutes before next check
+                time.sleep(60)  # Changed from 300 to 60 seconds - check every minute
 
             except Exception as e:
                 self.logger.error(f"Error occurred: {str(e)}")
-                time.sleep(60)
+                time.sleep(10)  # Changed from 60 to 30 seconds
 
     def login(self, username: str, password: str, mfa_key: str = None):
         """
