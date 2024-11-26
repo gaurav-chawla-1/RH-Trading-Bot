@@ -1,0 +1,6 @@
+robin_stocks==3.0.6
+pandas==1.5.3
+numpy==1.21.6
+TA-Lib==0.4.19
+pyotp==2.8.0
+urllib3==1.26.15

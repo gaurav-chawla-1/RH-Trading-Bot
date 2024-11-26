@@ -1,0 +1,12 @@
+# Virtual Environment
+venvrh/
+venv/
+env/
+.env/
+.venv/
+
+# Trade History and Logs
+trades/
+*.log
+trading_log.txt
+*.json
