@@ -13,7 +13,11 @@ import numpy as np
 
 class RobinhoodTrader:
     def __init__(self, debug: bool = False, initial_amount: float = 100.0, 
-                 strategy: str = 'basic', log_file: str = 'trading_log.txt'):
+                 strategy: str = 'basic', log_file: str = 'trading_log.txt',
+                 stop_loss: float = 30.0, take_profit: float = 3.0,
+                 interval_minutes: int = 1, extended_hours: bool = True,
+                 asset_type: str = 'stock', rsi_upper: float = 70.0,
+                 rsi_lower: float = 30.0):
         self.logged_in = False
         self.current_position = None
         self.buy_price = None
@@ -24,12 +28,22 @@ class RobinhoodTrader:
         self.trades_history: List[Dict] = []
         self.total_profit_loss = 0.0
         
+        # Trading parameters
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.interval_minutes = interval_minutes
+        self.extended_hours = extended_hours
+        self.rsi_upper = rsi_upper
+        self.rsi_lower = rsi_lower
+        
         # Setup logging
         self.setup_logging(log_file)
         
         # Create trades directory if it doesn't exist
         if self.debug:
             os.makedirs('trades', exist_ok=True)
+        
+        self.asset_type = asset_type.lower()
 
     def setup_logging(self, log_file: str):
         self.logger = logging.getLogger('RobinhoodTrader')
@@ -66,64 +80,49 @@ class RobinhoodTrader:
             with open(filename, 'w') as f:
                 json.dump(existing_trades, f, indent=4)
 
-    def get_advanced_signals(self, df: pd.DataFrame) -> Dict:
-        """
-        Calculate advanced technical indicators with proper windowing
-        """
+    def get_advanced_signals(self, df: pd.DataFrame, price_col: str) -> Dict:
+        """Calculate advanced signals for both stocks and crypto"""
         try:
             signals = {}
             
-            # Ensure we have enough data points
-            if len(df) < 26:  # MACD needs at least 26 periods
-                self.logger.error("Insufficient data for advanced signals")
-                return None
+            close_prices = df[price_col].values
             
-            close_prices = df['close_price'].values
-            
-            # MACD calculation (12, 26, 9)
-            exp1 = df['close_price'].ewm(span=12, adjust=False).mean()
-            exp2 = df['close_price'].ewm(span=26, adjust=False).mean()
+            # MACD calculation
+            exp1 = df[price_col].ewm(span=12, adjust=False).mean()
+            exp2 = df[price_col].ewm(span=26, adjust=False).mean()
             macd = exp1 - exp2
             signal = macd.ewm(span=9, adjust=False).mean()
             
             signals['macd'] = macd.iloc[-1]
             signals['macd_signal'] = signal.iloc[-1]
             
-            # Bollinger Bands (20 period, 2 standard deviations)
-            rolling_mean = df['close_price'].rolling(window=20).mean()
-            rolling_std = df['close_price'].rolling(window=20).std()
+            # Bollinger Bands
+            rolling_mean = df[price_col].rolling(window=20).mean()
+            rolling_std = df[price_col].rolling(window=20).std()
             signals['bb_upper'] = rolling_mean.iloc[-1] + (rolling_std.iloc[-1] * 2)
             signals['bb_lower'] = rolling_mean.iloc[-1] - (rolling_std.iloc[-1] * 2)
             
-            # VWAP calculation for the current day only
-            df['datetime'] = pd.to_datetime(df.index)
-            today = pd.Timestamp.now(tz='UTC').date()
-            df_today = df[df['datetime'].dt.date == today]
-            
-            if not df_today.empty:
-                high = df_today['high_price'].astype(float)
-                low = df_today['low_price'].astype(float)
-                close = df_today['close_price'].astype(float)
-                volume = df_today['volume'].astype(float)
-                
-                typical_price = (high + low + close) / 3
-                vwap = (typical_price * volume).cumsum() / volume.cumsum()
-                signals['vwap'] = vwap.iloc[-1]
+            # VWAP calculation
+            if self.asset_type == 'stock':
+                high = df['high_price'].astype(float)
+                low = df['low_price'].astype(float)
             else:
-                signals['vwap'] = close_prices[-1]  # Use current price if no intraday data
+                high = df['high_price'].astype(float)  # Crypto uses same column names
+                low = df['low_price'].astype(float)
+            
+            volume = df['volume'].astype(float)
+            typical_price = (high + low + df[price_col]) / 3
+            vwap = (typical_price * volume).cumsum() / volume.cumsum()
+            signals['vwap'] = vwap.iloc[-1]
             
             if self.debug:
-                self.logger.debug("\nAdvanced Signals Details:")
-                self.logger.debug(f"MACD: {signals['macd']:.2f}")
-                self.logger.debug(f"MACD Signal: {signals['macd_signal']:.2f}")
-                self.logger.debug(f"BB Upper: {signals['bb_upper']:.2f}")
-                self.logger.debug(f"BB Lower: {signals['bb_lower']:.2f}")
-                self.logger.debug(f"VWAP: {signals['vwap']:.2f}")
-                self.logger.debug(f"Data points used: {len(df)}")
-                self.logger.debug(f"Today's data points: {len(df_today) if 'df_today' in locals() else 0}")
+                self.logger.debug("\nAdvanced Signals Calculation:")
+                self.logger.debug(f"Using price column: {price_col}")
+                self.logger.debug(f"Data points: {len(df)}")
+                self.logger.debug(f"Latest price: {close_prices[-1]}")
             
             return signals
-            
+                
         except Exception as e:
             self.logger.error(f"Error calculating advanced signals: {str(e)}")
             if self.debug:
@@ -131,83 +130,85 @@ class RobinhoodTrader:
                 self.logger.debug(traceback.format_exc())
             return None
 
-    def get_rsi_data(self, symbol, interval='5minute', lookback='week'):
-        """
-        Get RSI and other technical indicators for a symbol
-        Supported spans: 'day', 'week', 'month', '3month', 'year', '5year'
-        Supported intervals: '5minute', '10minute', 'hour', 'day', 'week'
-        """
+    def get_rsi_data(self, symbol, interval=None, lookback='day'):
+        """Get RSI and other technical indicators for a symbol"""
         try:
-            # Get historical data with correct bounds and span
-            historical_data = rh.stocks.get_stock_historicals(
-                symbol,
-                interval=interval,
-                span='day',  # Use 'day' for extended hours
-                bounds='extended'  # Use extended hours data
-            )
-            
+            # Set interval based on configured interval_minutes
+            if interval is None:
+                if self.interval_minutes <= 5:
+                    interval = '5minute'
+                elif self.interval_minutes <= 10:
+                    interval = '10minute'
+                else:
+                    interval = 'hour'
+
+            if self.asset_type == 'stock':
+                historical_data = rh.stocks.get_stock_historicals(
+                    symbol,
+                    interval=interval,
+                    span='day',
+                    bounds='extended' if self.extended_hours else 'regular'
+                )
+                price_col = 'close_price'
+            else:
+                # Remove .X suffix for crypto API calls
+                clean_symbol = symbol.replace('.X', '')
+                # Verify crypto symbol first
+                crypto_info = rh.crypto.get_crypto_info(clean_symbol)
+                if not crypto_info:
+                    self.logger.error(f"Invalid crypto symbol: {clean_symbol}")
+                    return None, None
+                
+                historical_data = rh.crypto.get_crypto_historicals(
+                    clean_symbol,
+                    interval=interval,
+                    span='day',
+                    bounds='24_7'
+                )
+                price_col = 'close_price'  # Crypto also uses close_price
+
             if not historical_data:
                 self.logger.error(f"No historical data received for {symbol}")
                 return None, None
-            
-            # Convert to DataFrame with datetime index
+
+            # Convert to DataFrame
             df = pd.DataFrame(historical_data)
-            
-            # Handle datetime conversion safely
-            try:
-                df['timestamp'] = pd.to_datetime([x['begins_at'] for x in historical_data])
-                df.set_index('timestamp', inplace=True)
-            except Exception as e:
-                self.logger.error(f"Error processing timestamps: {str(e)}")
-                if self.debug:
-                    self.logger.debug(f"Data sample: {historical_data[0] if historical_data else 'No data'}")
-                return None, None
+
+            # Process timestamps
+            df['timestamp'] = pd.to_datetime([x['begins_at'] for x in historical_data])
+            df.set_index('timestamp', inplace=True)
             
             # Convert price columns
-            df['close_price'] = df['close_price'].astype(float)
-            
-            # Get only the most recent data points
-            now = pd.Timestamp.now(tz='UTC')
-            cutoff = now - pd.Timedelta(hours=24)  # Get last 24 hours of data
-            df = df[df.index > cutoff]
-            
-            if len(df) < 14:  # Need at least 14 periods for RSI
-                self.logger.error(f"Insufficient data points: {len(df)}")
-                return None, None
-            
-            # Calculate RSI using talib
-            close_prices = df['close_price'].values
+            df[price_col] = df[price_col].astype(float)
+
+            if self.debug:
+                self.logger.debug(f"Available columns: {df.columns.tolist()}")
+                self.logger.debug(f"First row data: {df.iloc[0].to_dict()}")
+
+            # Calculate RSI
+            close_prices = df[price_col].values
             rsi = ta.RSI(close_prices, timeperiod=14)
             current_rsi = rsi[-1]
-            
-            if self.debug:
-                self.logger.debug(f"Time window: {df.index[0]} to {df.index[-1]}")
-                self.logger.debug(f"Data points: {len(df)}")
-                self.logger.debug(f"Latest close price: {close_prices[-1]}")
-                self.logger.debug(f"Calculated RSI: {current_rsi}")
-                
-                # Log last few prices to verify changes
-                self.logger.debug("Last 5 prices:")
-                for idx, price in enumerate(close_prices[-5:]):
-                    self.logger.debug(f"  {df.index[-5+idx]}: ${price:.2f}")
-            
+
             if self.strategy == 'advanced':
-                advanced_signals = self.get_advanced_signals(df)
+                advanced_signals = self.get_advanced_signals(df, price_col)
                 return current_rsi, advanced_signals
-            
+
             return current_rsi, None
-            
+
         except Exception as e:
             self.logger.error(f"Error calculating RSI: {str(e)}")
             if self.debug:
                 import traceback
                 self.logger.debug(traceback.format_exc())
+                if 'df' in locals():
+                    self.logger.debug(f"DataFrame columns: {df.columns.tolist()}")
             return None, None
 
     def should_buy(self, current_price: float, current_rsi: float, 
                   advanced_signals: Dict = None) -> bool:
         if self.strategy == 'basic':
-            return current_rsi <= 30
+            return current_rsi <= self.rsi_lower
         
         elif self.strategy == 'advanced':
             if advanced_signals is None:
@@ -220,13 +221,13 @@ class RobinhoodTrader:
             
             if self.debug:
                 self.logger.debug("\nBuy Signal Analysis:")
-                self.logger.debug(f"RSI Condition: {current_rsi <= 30}")
+                self.logger.debug(f"RSI Condition: {current_rsi <= self.rsi_lower}")
                 self.logger.debug(f"MACD Crossover: {macd_crossover}")
                 self.logger.debug(f"Price Below BB: {price_below_bb}")
                 self.logger.debug(f"Price Below VWAP: {price_below_vwap}")
             
             return (
-                current_rsi <= 30 and
+                current_rsi <= self.rsi_lower and
                 macd_crossover and
                 price_below_bb and
                 price_below_vwap
@@ -236,7 +237,9 @@ class RobinhoodTrader:
                    profit_percentage: float, loss_percentage: float,
                    advanced_signals: Dict = None) -> bool:
         if self.strategy == 'basic':
-            return (current_rsi >= 70 or profit_percentage >= 3 or loss_percentage >= 30)
+            return (current_rsi >= self.rsi_upper or 
+                    profit_percentage >= self.take_profit or 
+                    loss_percentage >= self.stop_loss)
         
         elif self.strategy == 'advanced':
             if advanced_signals is None:
@@ -247,127 +250,159 @@ class RobinhoodTrader:
             
             if self.debug:
                 self.logger.debug("\nSell Signal Analysis:")
-                self.logger.debug(f"RSI Condition: {current_rsi >= 70}")
-                self.logger.debug(f"Profit Target: {profit_percentage >= 3}")
-                self.logger.debug(f"Stop Loss: {loss_percentage >= 30}")
+                self.logger.debug(f"RSI Condition: {current_rsi >= self.rsi_upper}")
+                self.logger.debug(f"Profit Target: {profit_percentage >= self.take_profit}")
+                self.logger.debug(f"Stop Loss: {loss_percentage >= self.stop_loss}")
                 self.logger.debug(f"MACD Crossunder: {macd_crossunder}")
                 self.logger.debug(f"Price Above BB: {price_above_bb}")
             
             return (
-                current_rsi >= 70 or
-                profit_percentage >= 3 or
-                loss_percentage >= 30 or
+                current_rsi >= self.rsi_upper or
+                profit_percentage >= self.take_profit or
+                loss_percentage >= self.stop_loss or
                 (macd_crossunder and profit_percentage > 1) or
                 price_above_bb
             )
 
-    def execute_trade_strategy(self, symbol):
+    def execute_trade_strategies(self, symbols: List[str]):
+        """Execute trades for multiple symbols simultaneously"""
         if not self.logged_in:
             self.logger.error("Please login first")
             return
 
-        last_price = None
-        last_check_time = None
+        # Store trading state for each symbol
+        trading_states = {}
+        for symbol in symbols:
+            # Handle crypto symbol
+            if self.asset_type == 'crypto':
+                clean_symbol = symbol.replace('.X', '')
+                crypto_info = rh.crypto.get_crypto_info(clean_symbol)
+                if not crypto_info:
+                    self.logger.error(f"Invalid crypto symbol: {clean_symbol}")
+                    continue
+                trading_symbol = clean_symbol
+            else:
+                trading_symbol = symbol
+
+            trading_states[trading_symbol] = {
+                'current_position': None,
+                'buy_price': None,
+                'last_price': None,
+                'last_check_time': None,
+                'total_profit_loss': 0.0
+            }
+
+        self.logger.info("\nStarting trading bot with parameters:")
+        self.logger.info(f"Symbols: {', '.join(symbols)}")
+        self.logger.info(f"Stop Loss: {self.stop_loss}%")
+        self.logger.info(f"Take Profit: {self.take_profit}%")
+        self.logger.info(f"Check Interval: {self.interval_minutes} minute(s)")
+        self.logger.info(f"Extended Hours: {'Yes' if self.extended_hours else 'No'}")
+        self.logger.info(f"RSI Bounds: Upper={self.rsi_upper}, Lower={self.rsi_lower}")
 
         while True:
             try:
                 current_time = datetime.datetime.now()
                 
-                # Check if market is open (simple check, can be enhanced)
-                if current_time.hour < 9 or current_time.hour >= 16:
+                # Check if market is open (if not using extended hours)
+                if not self.extended_hours and (current_time.hour < 9 or current_time.hour >= 16):
                     self.logger.info("Market is closed. Waiting for market hours...")
-                    time.sleep(60)  # Changed from 300 to 60 seconds
+                    time.sleep(60)
                     continue
-                    
-                current_price = float(rh.stocks.get_latest_price(symbol)[0])
-                
-                # Skip if price hasn't changed
-                if last_price == current_price and last_check_time and \
-                   (current_time - last_check_time).seconds < 60:  # Changed from 300 to 60 seconds
-                    time.sleep(10)  # Short sleep if no change
-                    continue
-                    
-                last_price = current_price
-                last_check_time = current_time
-                
-                current_rsi, advanced_signals = self.get_rsi_data(symbol)
-                
-                if current_rsi is None:
-                    self.logger.error("Failed to get RSI data, retrying in 30 seconds...")
-                    time.sleep(30)  # Changed from 60 to 30 seconds
-                    continue
-                
-                self.logger.info(f"\nTime: {current_time}")
-                self.logger.info(f"Current Price: ${current_price:.2f}")
-                self.logger.info(f"Current RSI: {current_rsi:.2f}")
-                self.logger.info(f"Total Profit/Loss: ${self.total_profit_loss:.2f}")
-                
-                if self.debug and advanced_signals:
-                    self.logger.debug(f"Advanced Signals: {json.dumps(advanced_signals, indent=2)}")
 
-                if self.current_position is None:
-                    if self.should_buy(current_price, current_rsi, advanced_signals):
-                        # Calculate position size based on risk management
-                        shares = int(self.initial_amount / current_price)
-                        if shares > 0:
-                            self.logger.info(f"Buy Signal: RSI = {current_rsi:.2f}")
-                            self.buy_price = current_price
-                            self.current_position = 'LONG'
-                            self.logger.info(f"Buying {shares} shares of {symbol} at ${current_price:.2f}")
+                # Process each symbol
+                for trading_symbol in trading_states:
+                    state = trading_states[trading_symbol]
+                    
+                    current_price = self.get_current_price(trading_symbol)
+                    if current_price is None:
+                        continue
+                    
+                    # Skip if price hasn't changed
+                    if (state['last_price'] == current_price and 
+                        state['last_check_time'] and 
+                        (current_time - state['last_check_time']).seconds < 60):
+                        continue
+                    
+                    state['last_price'] = current_price
+                    state['last_check_time'] = current_time
+                    
+                    current_rsi, advanced_signals = self.get_rsi_data(trading_symbol)
+                    
+                    if current_rsi is None:
+                        continue
+                    
+                    self.logger.info(f"\nSymbol: {trading_symbol}")
+                    self.logger.info(f"Time: {current_time}")
+                    self.logger.info(f"Current Price: ${current_price:.2f}")
+                    self.logger.info(f"Current RSI: {current_rsi:.2f}")
+                    self.logger.info(f"Total Profit/Loss: ${state['total_profit_loss']:.2f}")
+                    
+                    if self.debug and advanced_signals:
+                        self.logger.debug(f"Advanced Signals: {json.dumps(advanced_signals, indent=2)}")
+
+                    if state['current_position'] is None:
+                        if self.should_buy(current_price, current_rsi, advanced_signals):
+                            shares = int(self.initial_amount / current_price)
+                            if shares > 0:
+                                self.logger.info(f"Buy Signal for {trading_symbol}: RSI = {current_rsi:.2f}")
+                                state['buy_price'] = current_price
+                                state['current_position'] = 'LONG'
+                                self.logger.info(f"Buying {shares} shares at ${current_price:.2f}")
+                                
+                                trade_data = {
+                                    'timestamp': datetime.datetime.now().isoformat(),
+                                    'action': 'BUY',
+                                    'symbol': trading_symbol,
+                                    'price': current_price,
+                                    'shares': shares,
+                                    'rsi': current_rsi,
+                                    'total_profit_loss': state['total_profit_loss']
+                                }
+                                self.save_trade(trade_data)
+                    
+                    elif state['current_position'] == 'LONG':
+                        profit_percentage = ((current_price - state['buy_price']) / state['buy_price']) * 100
+                        loss_percentage = ((state['buy_price'] - current_price) / state['buy_price']) * 100
+
+                        if self.should_sell(current_price, current_rsi, profit_percentage, 
+                                          loss_percentage, advanced_signals):
+                            shares = int(self.initial_amount / state['buy_price'])
+                            trade_profit = (current_price - state['buy_price']) * shares
+                            state['total_profit_loss'] += trade_profit
+
+                            self.logger.info(f"Sell Signal for {trading_symbol}:")
+                            if current_rsi >= self.rsi_upper:
+                                self.logger.info(f"RSI overbought: {current_rsi:.2f}")
+                            if profit_percentage >= self.take_profit:
+                                self.logger.info(f"Profit target reached: {profit_percentage:.2f}%")
+                            if loss_percentage >= self.stop_loss:
+                                self.logger.info(f"Stop loss triggered: {loss_percentage:.2f}%")
+                            
+                            self.logger.info(f"Selling at ${current_price:.2f}")
+                            self.logger.info(f"Trade Profit/Loss: ${trade_profit:.2f}")
+                            self.logger.info(f"Total Profit/Loss: ${state['total_profit_loss']:.2f}")
                             
                             trade_data = {
                                 'timestamp': datetime.datetime.now().isoformat(),
-                                'action': 'BUY',
-                                'symbol': symbol,
+                                'action': 'SELL',
+                                'symbol': trading_symbol,
                                 'price': current_price,
-                                'shares': shares,
-                                'rsi': current_rsi,
-                                'total_profit_loss': self.total_profit_loss
+                                'profit_percentage': profit_percentage,
+                                'trade_profit_loss': trade_profit,
+                                'total_profit_loss': state['total_profit_loss'],
+                                'rsi': current_rsi
                             }
                             self.save_trade(trade_data)
-                
-                elif self.current_position == 'LONG':
-                    profit_percentage = ((current_price - self.buy_price) / self.buy_price) * 100
-                    loss_percentage = ((self.buy_price - current_price) / self.buy_price) * 100
+                            
+                            state['current_position'] = None
+                            state['buy_price'] = None
 
-                    if self.should_sell(current_price, current_rsi, profit_percentage, 
-                                      loss_percentage, advanced_signals):
-                        shares = int(self.initial_amount / self.buy_price)
-                        trade_profit = (current_price - self.buy_price) * shares
-                        self.total_profit_loss += trade_profit
-
-                        self.logger.info("Sell Signal:")
-                        if current_rsi >= 70:
-                            self.logger.info(f"RSI overbought: {current_rsi:.2f}")
-                        if profit_percentage >= 3:
-                            self.logger.info(f"Profit target reached: {profit_percentage:.2f}%")
-                        if loss_percentage >= 30:
-                            self.logger.info(f"Stop loss triggered: {loss_percentage:.2f}%")
-                        
-                        self.logger.info(f"Selling {symbol} at ${current_price:.2f}")
-                        self.logger.info(f"Trade Profit/Loss: ${trade_profit:.2f}")
-                        self.logger.info(f"Total Profit/Loss: ${self.total_profit_loss:.2f}")
-                        
-                        trade_data = {
-                            'timestamp': datetime.datetime.now().isoformat(),
-                            'action': 'SELL',
-                            'symbol': symbol,
-                            'price': current_price,
-                            'profit_percentage': profit_percentage,
-                            'trade_profit_loss': trade_profit,
-                            'total_profit_loss': self.total_profit_loss,
-                            'rsi': current_rsi
-                        }
-                        self.save_trade(trade_data)
-                        
-                        self.current_position = None
-                        self.buy_price = None
-
-                time.sleep(60)  # Changed from 300 to 60 seconds - check every minute
+                time.sleep(self.interval_minutes * 60)
 
             except Exception as e:
                 self.logger.error(f"Error occurred: {str(e)}")
-                time.sleep(10)  # Changed from 60 to 30 seconds
+                time.sleep(10)
 
     def login(self, username: str, password: str, mfa_key: str = None):
         """
@@ -392,6 +427,30 @@ class RobinhoodTrader:
         except Exception as e:
             self.logger.error(f"Login failed: {str(e)}")
             self.logged_in = False
+
+    def get_current_price(self, symbol: str) -> float:
+        """Get current price for stock or crypto"""
+        try:
+            if self.asset_type == 'stock':
+                return float(rh.stocks.get_latest_price(symbol)[0])
+            else:
+                # Remove .X suffix if present for API call
+                clean_symbol = symbol.replace('.X', '')
+                # Get crypto info first to verify symbol
+                crypto_info = rh.crypto.get_crypto_info(clean_symbol)
+                if not crypto_info:
+                    self.logger.error(f"Invalid crypto symbol: {clean_symbol}")
+                    return None
+                
+                quote = rh.crypto.get_crypto_quote(clean_symbol)
+                if quote and 'mark_price' in quote:
+                    return float(quote['mark_price'])
+                else:
+                    self.logger.error(f"Could not get price for {clean_symbol}")
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error getting price for {symbol}: {str(e)}")
+            return None
 
 def analyze_daily_trades(date_str: str = None):
     if date_str is None:
@@ -427,7 +486,24 @@ def main():
                        help='Trading strategy to use')
     parser.add_argument('--initial-amount', type=float, default=100.0,
                        help='Initial trading amount')
-    parser.add_argument('--analyze-date', type=str, help='Analyze trades for specific date (YYYYMMDD)')
+    parser.add_argument('--analyze-date', type=str, 
+                       help='Analyze trades for specific date (YYYYMMDD)')
+    parser.add_argument('--stop-loss', type=float, default=30.0,
+                       help='Stop loss percentage (default: 30%)')
+    parser.add_argument('--take-profit', type=float, default=3.0,
+                       help='Take profit percentage (default: 3%)')
+    parser.add_argument('--interval', type=int, default=1,
+                       help='Trading check interval in minutes (default: 1)')
+    parser.add_argument('--no-extended-hours', action='store_true',
+                       help='Disable extended hours trading')
+    parser.add_argument('--asset-type', choices=['stock', 'crypto'], default='stock',
+                       help='Asset type to trade (stock or crypto)')
+    parser.add_argument('--rsi-upper', type=float, default=70.0,
+                       help='RSI upper bound for sell signal (default: 70)')
+    parser.add_argument('--rsi-lower', type=float, default=30.0,
+                       help='RSI lower bound for buy signal (default: 30)')
+    parser.add_argument('--tickers', type=str, nargs='+',
+                       help='List of tickers to trade (space-separated)')
     
     args = parser.parse_args()
     
@@ -438,18 +514,37 @@ def main():
     trader = RobinhoodTrader(
         debug=args.debug,
         initial_amount=args.initial_amount,
-        strategy=args.strategy
+        strategy=args.strategy,
+        stop_loss=args.stop_loss,
+        take_profit=args.take_profit,
+        interval_minutes=args.interval,
+        extended_hours=not args.no_extended_hours,
+        asset_type=args.asset_type,
+        rsi_upper=args.rsi_upper,
+        rsi_lower=args.rsi_lower
     )
     
     username = input("Enter Robinhood username: ")
     password = input("Enter Robinhood password: ")
     
-    # Login now uses phone OTP instead of MFA key
     trader.login(username, password)
     
     if trader.logged_in:
-        symbol = input("Enter stock symbol to trade: ").upper()
-        trader.execute_trade_strategy(symbol)
+        tickers = []
+        if args.tickers:
+            tickers = args.tickers
+        else:
+            if args.asset_type == 'crypto':
+                print("\nAvailable crypto tickers: BTC, ETH, DOGE, LTC, BCH, ETC")
+                tickers_input = input("Enter crypto tickers to trade (space-separated): ")
+            else:
+                tickers_input = input("Enter stock tickers to trade (space-separated): ")
+            tickers = tickers_input.upper().split()
+        
+        if tickers:
+            trader.execute_trade_strategies(tickers)
+        else:
+            print("No tickers provided. Exiting...")
 
 if __name__ == "__main__":
     main() 

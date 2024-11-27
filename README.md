@@ -1,13 +1,13 @@
 # ROBINHOOD TRADING BOT 
 ====================
 
-A Python-based automated trading bot for Robinhood that uses RSI (Relative Strength Index) and other technical indicators to make trading decisions.
+A Python-based automated trading bot for Robinhood that uses RSI (Relative Strength Index) and other technical indicators to make trading decisions for both stocks and cryptocurrencies.
 
-Note: This is a work in progress and is not yet ready for production use and only provides the sample trades in the trades/ directory.
+Note: This is a work in progress and is not yet ready use and only provides the sample trades in the trades/ directory.
 
 # FEATURES
 --------
-* Automated trading based on RSI (Relative Strength Index)
+* Automated trading for both stocks and cryptocurrencies
 * Two trading strategies: Basic and Advanced
 * Real-time trade logging and tracking
 * Trade history analysis
@@ -15,6 +15,8 @@ Note: This is a work in progress and is not yet ready for production use and onl
 * Phone-based 2FA authentication
 * JSON-based trade history storage
 * Daily profit/loss tracking
+* 24/7 crypto trading support
+* Extended hours trading for stocks
 
 # PREREQUISITES
 ------------
@@ -24,9 +26,101 @@ Note: This is a work in progress and is not yet ready for production use and onl
 4. Active internet connection
 5. Phone for 2FA authentication
 
-# INSTALLATION INSTRUCTIONS
+# INSTALLATION INSTRUCTIONS (Use docker instructions from below if possible)
 ------------------------
 
+## DOCKER SETUP AND USAGE
+---------------------
+
+#### Prerequisites:
+- Docker installed on your system
+- Docker Compose (optional)
+
+#### Quick Start:
+1. Setup environment and build Docker image:
+```
+./run.sh setup
+```
+
+2. Start trading (no actual trades are made):
+```
+# For stocks
+./run.sh start stock --debug --tickers AAPL MSFT GOOGL
+
+# For crypto
+./run.sh start crypto --debug --tickers BTC ETH DOGE
+```
+
+3. View logs:
+```
+## View trade files
+./run.sh logs trades
+
+## View bot logs
+./run.sh logs bot
+
+## View docker logs
+./run.sh logs
+```
+
+4. Analyze trades:
+```
+./run.sh analyze 20240315
+```
+
+5. Stop the bot:
+```
+./run.sh stop
+```
+
+#### Directory Structure:
+```
+project/
+├── data/
+│   ├── trades/    # Trade history (persisted)
+│   └── logs/      # Log files (persisted)
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── trading_bot.py
+└── run.sh
+```
+
+#### Available Commands:
+```
+##### Setup environment
+./run.sh setup
+
+##### Start trading with options
+./run.sh start stock --debug --tickers AAPL MSFT --strategy advanced \
+                     --initial-amount 500 --stop-loss 20 --take-profit 4 \
+                     --interval 2 --rsi-upper 75 --rsi-lower 25
+
+##### View different types of logs
+./run.sh logs trades  # View trade files
+./run.sh logs bot    # View bot logs
+./run.sh logs        # View docker logs
+
+##### Analyze trades for a specific date
+./run.sh analyze 20240315
+
+##### Stop the bot
+./run.sh stop
+```
+
+#### Environment Variables:
+The following environment variables are set in the container:
+- `TZ=America/Los_Angeles` (PST timezone)
+- `LOG_DIR=/app/data/logs`
+- `TRADES_DIR=/app/data/trades`
+- `PYTHONUNBUFFERED=1`
+
+#### Data Persistence:
+Trade history and logs are stored in the `data/` directory on your host machine:
+- `data/trades/`: Contains JSON files with trade history
+- `data/logs/`: Contains log files
+
+# Use docker instructions from above if possible, following instructions are for local installation
 ### FOR MAC USERS:
 -------------
 1. Install TA-Lib:
@@ -89,18 +183,29 @@ Note: This is a work in progress and is not yet ready for production use and onl
 # USAGE INSTRUCTIONS
 -----------------
 
-1. BASIC USAGE:
+1. BASIC STOCK TRADING:
 ```
-   $ python trading_bot.py
+   $ python trading_bot.py --asset-type stock
+   $ python trading_bot.py --asset-type stock --tickers AAPL MSFT GOOGL
+
 ```
-2. ADVANCED USAGE:
+
+2. BASIC CRYPTO TRADING:
 ```
-   $ python trading_bot.py --debug --strategy advanced --initial-amount 500
+   $ python trading_bot.py --asset-type crypto
+   $ python trading_bot.py --asset-type crypto --tickers BTC ETH DOGE
 ```
-3. ANALYZE TRADES:
+
+3. ADVANCED CRYPTO TRADING:
+```
+   $ python trading_bot.py --asset-type crypto --debug --strategy advanced --initial-amount 500
+```
+
+4. ANALYZE TRADES:
 ```
    $ python trading_bot.py --analyze-date 20240315
 ```
+
 # COMMAND LINE ARGUMENTS:
 ----------------------
 ```
@@ -108,12 +213,21 @@ Note: This is a work in progress and is not yet ready for production use and onl
 --strategy         : Choose 'basic' or 'advanced' (default: basic)
 --initial-amount   : Set initial trading amount (default: $100)
 --analyze-date     : Analyze trades for specific date (format: YYYYMMDD)
+--interval         : Set trading check interval in minutes (default: 1)
+--stop-loss        : Set stop loss percentage (default: 30%)
+--take-profit      : Set take profit percentage (default: 3%)
+--interval         : Set trading check interval in minutes (default: 1)
+--no-extended-hours: Disable extended hours trading (Default: Enabled)
+--asset-type       : Choose 'stock' or 'crypto' (default: stock)
+--rsi-upper        : Set RSI upper bound for sell signal (default: 70)
+--rsi-lower        : Set RSI lower bound for buy signal (default: 30)
+--tickers          : List of tickers to trade (space-separated)
 ```
 
 # TRADING STRATEGIES
 -----------------
 
-1. BASIC STRATEGY:
+1. BASIC STRATEGY (Both Stock and Crypto):
    Buy Signals:
    - RSI <= 30
 
@@ -136,17 +250,25 @@ Note: This is a work in progress and is not yet ready for production use and onl
    - MACD < Signal Line with profit > 1%
    - Price > Upper Bollinger Band
 
-# FILE STRUCTURE
--------------
-```
-robinhood-trading-bot/
-├── trading_bot.py      : Main application file
-├── requirements.txt    : Python dependencies
-├── README.txt         : Documentation
-├── trading_log.txt    : Trading activity logs
-└── trades/            : Directory containing trade history
-    └── trades_YYYYMMDD.json
-```
+
+# CRYPTO-SPECIFIC FEATURES
+-----------------------
+1. 24/7 Trading:
+   - No market hours restrictions
+   - Continuous monitoring and trading
+
+2. Price Handling:
+   - Uses mark_price for crypto assets
+   - Handles crypto-specific price formatting
+
+3. Volume Analysis:
+   - Adapted VWAP calculation for crypto markets
+   - Crypto-specific volume weighting
+
+4. Risk Management:
+   - Same stop-loss and take-profit mechanics
+   - Position sizing adapted for crypto volatility
+
 
 # CONFIGURATION
 ------------
@@ -176,21 +298,53 @@ robinhood-trading-bot/
    - Error messages
    - JSON trade history
 
-# EXAMPLE USAGE SESSION
+# EXAMPLE USAGE SESSIONS
 --------------------
+For Stocks:
 ```
-$ python trading_bot.py --debug --strategy advanced
+$ python trading_bot.py --asset-type stock --debug --strategy advanced
 Enter Robinhood username: your_username
 Enter Robinhood password: your_password
 Enter the OTP sent to your phone: 123456
-Enter stock symbol to trade: AAPL
+Enter symbol to trade: AAPL
 ```
+
+For Crypto:
+```
+$ python trading_bot.py --asset-type crypto --debug --strategy advanced
+Enter Robinhood username: your_username
+Enter Robinhood password: your_password
+Enter the OTP sent to your phone: 123456
+Enter symbol to trade: BTC
+```
+
+# CRYPTO TRADING CONSIDERATIONS
+---------------------------
+1. Volatility:
+   - Crypto markets are more volatile
+   - Consider using tighter stop-losses
+   - Monitor positions more frequently
+
+2. 24/7 Trading:
+   - Bot runs continuously
+   - No market hour restrictions
+   - Consider server/system uptime
+
+3. Price Feeds:
+   - Uses Robinhood's crypto price feeds
+   - Mark price for current values
+   - Historical data for analysis
+
+4. Risk Management:
+   - Start with smaller positions
+   - Monitor trades more frequently
+   - Consider crypto-specific risk levels
 
 # SAFETY FEATURES
 --------------
 1. Two-Factor Authentication
 2. Stop Loss Protection
-3. Trade History Tracking
+3. Trade History Tracking (Sample trades in trades/ directory)
 4. Error Handling
 5. Logging System
 

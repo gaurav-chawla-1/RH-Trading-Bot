@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    volumes:
+      - ./data/trades:/app/data/trades
+      - ./data/logs:/app/data/logs
+    environment:
+      - TZ=America/Los_Angeles
+      - LOG_DIR=/app/data/logs
+      - TRADES_DIR=/app/data/trades
+    restart: unless-stopped 
